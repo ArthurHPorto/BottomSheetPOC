@@ -2,22 +2,41 @@ import SwiftUI
 import UIKit
 
 enum BottomSheetMotion {
+    /// SwiftUI `spring(response:dampingFraction:)` maps to UIKit as
+    /// stiffness `(2π / response)²` and damping `2 · dampingFraction · sqrt(stiffness)`.
     static let response: Double = 0.35
-    static let damping: Double = 1
+    static let dampingFraction: Double = 1
+
+    static var stiffness: CGFloat {
+        let omega = 2 * CGFloat.pi / CGFloat(response)
+        return omega * omega
+    }
+
+    static var dampingCoefficient: CGFloat {
+        2 * CGFloat(dampingFraction) * sqrt(stiffness)
+    }
 
     static var animation: Animation {
-        .spring(response: response, dampingFraction: damping)
+        .spring(response: response, dampingFraction: dampingFraction)
+    }
+
+    static var timing: UISpringTimingParameters {
+        UISpringTimingParameters(
+            mass: 1,
+            stiffness: stiffness,
+            damping: dampingCoefficient,
+            initialVelocity: .zero
+        )
     }
 }
 
 /// Presents SwiftUI content with `UISheetPresentationController`.
 ///
-/// SwiftUI animates insertions anywhere in the content. The sheet follows that
-/// same spring, without snapshots or a second clip, so the frame rate stays up
-/// and rows added at the top, middle, or bottom move with the sheet.
+/// SwiftUI animates the layout. The sheet plays that same spring once, so
+/// Core Animation interpolates the frame instead of laying the tree out on
+/// every tick. Insertions at the top, middle, or bottom stay on this motion.
 final class BottomSheetContainerController<Content: View>: UIViewController, UISheetPresentationControllerDelegate {
     private let heightRelay = HeightRelay()
-    private let heightAnimationProxy = HeightAnimationProxy()
     private let hostingController: UIHostingController<BottomSheetRoot<Content>>
 
     private var configuration = BottomSheetConfiguration()
@@ -25,17 +44,9 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     private var appliedOptions: SheetOptions?
     private var lastAppliedSelection: BottomSheetDetent?
     private var measuredContentHeight: CGFloat = 0
-    private var displayedContentHeight: CGFloat = 0
     private var heightTarget: CGFloat = 0
-    private var heightVelocity: CGFloat = 0
-    private var heightLink: CADisplayLink?
-    private var lastHeightTick: CFTimeInterval = 0
-    private var lastPushedHeight: Int = 0
     private var hasAppeared = false
-
-    /// Matches `BottomSheetMotion.animation`.
-    private let heightStiffness: CGFloat = 322
-    private let heightDamping: CGFloat = 36
+    private var heightAnimator: UIViewPropertyAnimator?
 
     var shouldDismiss: () -> Bool = { true }
     var onWillDismiss: () -> Void = {}
@@ -61,13 +72,6 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         heightRelay.onChange = { [weak self] height in
             self?.noteContentHeight(height)
         }
-        heightAnimationProxy.onTick = { [weak self] in
-            self?.tickHeightAnimation()
-        }
-    }
-
-    deinit {
-        heightLink?.invalidate()
     }
 
     @available(*, unavailable)
@@ -105,7 +109,9 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         if isBeingDismissed || presentingViewController == nil {
-            stopHeightAnimation()
+            heightAnimator?.stopAnimation(true)
+            heightAnimator = nil
+            heightTarget = measuredContentHeight
         }
     }
 
@@ -140,7 +146,6 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
             let estimated = estimateHeight(width: width, content: content)
             if estimated > 1 {
                 measuredContentHeight = estimated
-                displayedContentHeight = estimated
                 heightTarget = estimated
             }
         }
@@ -157,20 +162,44 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     func noteContentHeight(_ height: CGFloat) {
         let next = resolvedContentHeight(ceil(height))
         guard next > 1, abs(next - heightTarget) >= 1 else { return }
+        let previous = measuredContentHeight
         heightTarget = next
+        measuredContentHeight = next
         let canAnimate = hasAppeared
             && presentingViewController != nil
             && !isBeingPresented
             && !isBeingDismissed
-            && displayedContentHeight > 1
+            && previous > 1
             && isShowingContentDetent
-        guard canAnimate else {
-            stopHeightAnimation()
-            displayedContentHeight = next
-            pushDisplayedHeight()
+        guard canAnimate, let sheet = sheetPresentationController else {
+            UIView.performWithoutAnimation {
+                self.sheetPresentationController?.invalidateDetents()
+            }
             return
         }
-        startHeightAnimationIfNeeded()
+        // The content change is already inside SwiftUI's spring. Joining that
+        // transaction keeps the sheet on the same curve instead of starting a
+        // second animator that drops frames and drifts.
+        if UIView.areAnimationsEnabled {
+            sheet.animateChanges {
+                sheet.invalidateDetents()
+            }
+            return
+        }
+        heightAnimator?.stopAnimation(true)
+        let animator = UIViewPropertyAnimator(duration: BottomSheetMotion.response, timingParameters: BottomSheetMotion.timing)
+        animator.isInterruptible = true
+        animator.addAnimations {
+            sheet.animateChanges {
+                sheet.invalidateDetents()
+            }
+        }
+        animator.addCompletion { [weak self] position in
+            guard let self, position == .end else { return }
+            self.heightAnimator = nil
+        }
+        heightAnimator = animator
+        animator.startAnimation()
     }
 
     private var effectiveGrabberInset: CGFloat {
@@ -190,48 +219,6 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     private var isShowingContentDetent: Bool {
         guard let identifier = sheetPresentationController?.selectedDetentIdentifier else { return true }
         return identifier == BottomSheetDetent.content.uiKitIdentifier
-    }
-
-    private func startHeightAnimationIfNeeded() {
-        guard heightLink == nil else { return }
-        lastHeightTick = CACurrentMediaTime()
-        let link = CADisplayLink(target: heightAnimationProxy, selector: #selector(HeightAnimationProxy.tick))
-        link.add(to: .main, forMode: .common)
-        heightLink = link
-    }
-
-    private func stopHeightAnimation() {
-        heightLink?.invalidate()
-        heightLink = nil
-        heightVelocity = 0
-    }
-
-    private func tickHeightAnimation() {
-        let now = CACurrentMediaTime()
-        let dt = min(1.0 / 30.0, max(now - lastHeightTick, 1.0 / 120.0))
-        lastHeightTick = now
-
-        let displacement = displayedContentHeight - heightTarget
-        let acceleration = (-heightStiffness * displacement) - (heightDamping * heightVelocity)
-        heightVelocity += acceleration * dt
-        displayedContentHeight += heightVelocity * dt
-
-        let settled = abs(displayedContentHeight - heightTarget) < 0.5 && abs(heightVelocity) < 10
-        if settled {
-            displayedContentHeight = heightTarget
-            stopHeightAnimation()
-        }
-        pushDisplayedHeight()
-    }
-
-    private func pushDisplayedHeight() {
-        let next = max(Int(displayedContentHeight.rounded()), 1)
-        guard next != lastPushedHeight else { return }
-        lastPushedHeight = next
-        measuredContentHeight = CGFloat(next)
-        UIView.performWithoutAnimation {
-            self.sheetPresentationController?.invalidateDetents()
-        }
     }
 
     private func pushDetentHeight() {
@@ -590,14 +577,6 @@ private struct SheetOptions: Equatable {
 
 private final class HeightRelay {
     var onChange: (CGFloat) -> Void = { _ in }
-}
-
-private final class HeightAnimationProxy: NSObject {
-    var onTick: (() -> Void)?
-
-    @objc func tick() {
-        onTick?()
-    }
 }
 
 private struct BottomSheetHeightPreferenceKey: PreferenceKey {
