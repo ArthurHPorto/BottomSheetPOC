@@ -66,18 +66,18 @@ struct ContentView: View {
         selectedDetent = .content
         isPresented = true
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            blocks.append(SheetBlock(title: "Bloco 3", detail: "Crescimento animado pelo detent de conteúdo."))
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            blocks.append(SheetBlock(title: "Bloco 4", detail: "A altura nova entra em invalidateDetents."))
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            blocks.append(SheetBlock(title: "Bloco 5", detail: "O fundo só escurece no detent large."))
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            selectedDetent = .large
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            selectedDetent = .content
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            blocks.removeLast()
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            insert("Fundo", at: blocks.count)
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            insert("Topo", at: 0)
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            insert("Meio", at: blocks.count / 2)
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            remove(at: 0)
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            remove(at: blocks.count - 1)
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            remove(at: blocks.count / 2)
         }
     }
 
@@ -95,6 +95,21 @@ struct ContentView: View {
             return "Detent: \(Int(value)) pt"
         case nil:
             return "Detent: automático"
+        }
+    }
+
+    private func insert(_ name: String, at index: Int) {
+        let block = SheetBlock(title: name, detail: "Inserido em \(name.lowercased()).")
+        let clamped = min(max(index, 0), blocks.count)
+        withAnimation(BottomSheetMotion.animation) {
+            blocks.insert(block, at: clamped)
+        }
+    }
+
+    private func remove(at index: Int) {
+        guard blocks.indices.contains(index) else { return }
+        withAnimation(BottomSheetMotion.animation) {
+            blocks.remove(at: index)
         }
     }
 }
@@ -126,42 +141,50 @@ private struct GrowingSheet: View {
                 .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
             }
 
-            HStack(spacing: 12) {
-                Button("Adicionar") {
-                    let number = blocks.count + 1
-                    blocks.append(
-                        SheetBlock(
-                            title: "Bloco \(number)",
-                            detail: "Novo conteúdo. A bottom sheet cresce com animação."
-                        )
-                    )
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Button("Em cima") { insertBlock(at: 0) }
+                    Button("No meio") { insertBlock(at: max(blocks.count / 2, 0)) }
+                    Button("Embaixo") { insertBlock(at: blocks.count) }
                 }
-                .buttonStyle(.borderedProminent)
-                .accessibilityIdentifier("add-block")
-
-                Button("Remover") {
-                    guard blocks.count > 1 else { return }
-                    blocks.removeLast()
+                HStack(spacing: 8) {
+                    Button("Tirar de cima") { removeBlock(at: 0) }
+                    Button("Tirar do meio") { removeBlock(at: blocks.count / 2) }
+                    Button("Tirar de baixo") { removeBlock(at: blocks.count - 1) }
                 }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("remove-block")
             }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
 
             HStack(spacing: 12) {
                 Button("Altura do conteúdo") {
                     selectedDetent = .content
                 }
-                .buttonStyle(.bordered)
-
                 Button("Tela cheia") {
                     selectedDetent = .large
                 }
-                .buttonStyle(.bordered)
             }
+            .buttonStyle(.bordered)
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func insertBlock(at index: Int) {
+        let place = index == 0 ? "cima" : (index >= blocks.count ? "baixo" : "meio")
+        let block = SheetBlock(title: "Novo \(place)", detail: "Entrou pela \(place).")
+        let clamped = min(max(index, 0), blocks.count)
+        withAnimation(BottomSheetMotion.animation) {
+            blocks.insert(block, at: clamped)
+        }
+    }
+
+    private func removeBlock(at index: Int) {
+        guard blocks.indices.contains(index) else { return }
+        withAnimation(BottomSheetMotion.animation) {
+            blocks.remove(at: index)
+        }
     }
 }
 
