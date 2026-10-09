@@ -7,6 +7,7 @@ struct ContentView: View {
         SheetBlock(title: "Bloco 1", detail: "A sheet usa a altura deste conteúdo."),
         SheetBlock(title: "Bloco 2", detail: "Adicionar outro bloco faz a sheet crescer."),
     ]
+    @State private var motion = BottomSheetMotion.resolvedFromLaunchArguments()
 
     private let autoplay = ProcessInfo.processInfo.arguments.contains("-BottomSheetAutoplay")
 
@@ -56,12 +57,13 @@ struct ContentView: View {
             selectedDetent: $selectedDetent,
             configuration: configuration
         ) {
-            GrowingSheet(blocks: $blocks, selectedDetent: $selectedDetent)
+            GrowingSheet(blocks: $blocks, selectedDetent: $selectedDetent, motion: $motion)
         }
         .onAppear(perform: startAutoplayIfNeeded)
     }
 
     private func startAutoplayIfNeeded() {
+        BottomSheetMotion.active = motion
         guard autoplay else { return }
         selectedDetent = .content
         isPresented = true
@@ -101,14 +103,14 @@ struct ContentView: View {
     private func insert(_ name: String, at index: Int) {
         let block = SheetBlock(title: name, detail: "Inserido em \(name.lowercased()).")
         let clamped = min(max(index, 0), blocks.count)
-        withAnimation(BottomSheetMotion.animation) {
+        BottomSheetMotion.perform(motion) {
             blocks.insert(block, at: clamped)
         }
     }
 
     private func remove(at index: Int) {
         guard blocks.indices.contains(index) else { return }
-        withAnimation(BottomSheetMotion.animation) {
+        BottomSheetMotion.perform(motion) {
             blocks.remove(at: index)
         }
     }
@@ -117,15 +119,31 @@ struct ContentView: View {
 private struct GrowingSheet: View {
     @Binding var blocks: [SheetBlock]
     @Binding var selectedDetent: BottomSheetDetent?
+    @Binding var motion: BottomSheetMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Conteúdo dinâmico")
                 .font(.title2.bold())
-            Text("Cada bloco aumenta a altura medida. A sheet anima até essa altura.")
+            Text("Cada bloco aumenta a altura medida. A sheet usa a mesma curva do conteúdo.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(BottomSheetMotion.allCases) { item in
+                        Button(item.title) {
+                            motion = item
+                            BottomSheetMotion.active = item
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .tint(item == motion ? Color.accentColor : Color.secondary)
+                        .accessibilityIdentifier("motion-\(item.rawValue)")
+                    }
+                }
+            }
 
             ForEach(blocks) { block in
                 VStack(alignment: .leading, spacing: 6) {
@@ -175,14 +193,14 @@ private struct GrowingSheet: View {
         let place = index == 0 ? "cima" : (index >= blocks.count ? "baixo" : "meio")
         let block = SheetBlock(title: "Novo \(place)", detail: "Entrou pela \(place).")
         let clamped = min(max(index, 0), blocks.count)
-        withAnimation(BottomSheetMotion.animation) {
+        BottomSheetMotion.perform(motion) {
             blocks.insert(block, at: clamped)
         }
     }
 
     private func removeBlock(at index: Int) {
         guard blocks.indices.contains(index) else { return }
-        withAnimation(BottomSheetMotion.animation) {
+        BottomSheetMotion.perform(motion) {
             blocks.remove(at: index)
         }
     }

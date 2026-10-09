@@ -1,30 +1,98 @@
 import SwiftUI
 import UIKit
 
-enum BottomSheetMotion {
-    /// SwiftUI `spring(response:dampingFraction:)` maps to UIKit as
-    /// stiffness `(2π / response)²` and damping `2 · dampingFraction · sqrt(stiffness)`.
-    static let response: Double = 0.35
-    static let dampingFraction: Double = 1
+/// One height curve for SwiftUI and for the sheet detent.
+///
+/// Add a case with `animation`, `duration`, and `timing`. `perform` publishes it
+/// as `active` for the rest of the turn, so the content layout and `noteContentHeight`
+/// read the same value.
+enum BottomSheetMotion: String, CaseIterable, Identifiable {
+    case spring
+    case ease
+    case quick
+    case linear
+    case bouncy
 
-    static var stiffness: CGFloat {
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .spring: "Mola"
+        case .ease: "Ease"
+        case .quick: "Rápida"
+        case .linear: "Linear"
+        case .bouncy: "Elástica"
+        }
+    }
+
+    var duration: TimeInterval {
+        switch self {
+        case .spring: 0.35
+        case .ease: 0.45
+        case .quick: 0.18
+        case .linear: 0.35
+        case .bouncy: 0.55
+        }
+    }
+
+    var animation: Animation {
+        switch self {
+        case .spring:
+            .spring(response: duration, dampingFraction: 1)
+        case .ease:
+            .easeInOut(duration: duration)
+        case .quick:
+            .easeOut(duration: duration)
+        case .linear:
+            .linear(duration: duration)
+        case .bouncy:
+            .spring(response: duration, dampingFraction: 0.62)
+        }
+    }
+
+    var timing: UITimingCurveProvider {
+        switch self {
+        case .spring:
+            Self.springTiming(response: duration, dampingFraction: 1)
+        case .ease:
+            UICubicTimingParameters(animationCurve: .easeInOut)
+        case .quick:
+            UICubicTimingParameters(animationCurve: .easeOut)
+        case .linear:
+            UICubicTimingParameters(animationCurve: .linear)
+        case .bouncy:
+            Self.springTiming(response: duration, dampingFraction: 0.62)
+        }
+    }
+
+    /// Curve used by the sheet until the next `perform`.
+    static var active: BottomSheetMotion = .spring
+
+    static func perform(_ motion: BottomSheetMotion, _ updates: () -> Void) {
+        active = motion
+        withAnimation(motion.animation, updates)
+    }
+
+    static func resolvedFromLaunchArguments() -> BottomSheetMotion {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard
+            let index = arguments.firstIndex(of: "-BottomSheetMotion"),
+            arguments.indices.contains(arguments.index(after: index))
+        else {
+            return .spring
+        }
+        return BottomSheetMotion(rawValue: arguments[arguments.index(after: index)]) ?? .spring
+    }
+
+    /// SwiftUI `spring(response:dampingFraction:)` as UIKit mass-spring constants.
+    private static func springTiming(response: TimeInterval, dampingFraction: CGFloat) -> UISpringTimingParameters {
         let omega = 2 * CGFloat.pi / CGFloat(response)
-        return omega * omega
-    }
-
-    static var dampingCoefficient: CGFloat {
-        2 * CGFloat(dampingFraction) * sqrt(stiffness)
-    }
-
-    static var animation: Animation {
-        .spring(response: response, dampingFraction: dampingFraction)
-    }
-
-    static var timing: UISpringTimingParameters {
-        UISpringTimingParameters(
+        let stiffness = omega * omega
+        let damping = 2 * dampingFraction * sqrt(stiffness)
+        return UISpringTimingParameters(
             mass: 1,
             stiffness: stiffness,
-            damping: dampingCoefficient,
+            damping: damping,
             initialVelocity: .zero
         )
     }
@@ -32,9 +100,9 @@ enum BottomSheetMotion {
 
 /// Presents SwiftUI content with `UISheetPresentationController`.
 ///
-/// SwiftUI animates the layout. The sheet plays that same spring once, so
-/// Core Animation interpolates the frame instead of laying the tree out on
-/// every tick. Insertions at the top, middle, or bottom stay on this motion.
+/// SwiftUI animates the layout with `BottomSheetMotion.active`. The sheet plays
+/// that same curve once, so Core Animation interpolates the frame. Insertions
+/// at the top, middle, or bottom stay on this motion.
 final class BottomSheetContainerController<Content: View>: UIViewController, UISheetPresentationControllerDelegate {
     private let heightRelay = HeightRelay()
     private let hostingController: UIHostingController<BottomSheetRoot<Content>>
@@ -177,17 +245,15 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
             }
             return
         }
-        // The content change is already inside SwiftUI's spring. Joining that
-        // transaction keeps the sheet on the same curve instead of starting a
-        // second animator that drops frames and drifts.
-        if UIView.areAnimationsEnabled {
-            sheet.animateChanges {
-                sheet.invalidateDetents()
-            }
-            return
-        }
+        animateDetent(on: sheet)
+    }
+
+    /// Resizes the detent once, using the active timing. `animateChanges` keeps
+    /// the sheet's own layout intact; invalidating every frame drops the frame rate.
+    private func animateDetent(on sheet: UISheetPresentationController) {
+        let motion = BottomSheetMotion.active
         heightAnimator?.stopAnimation(true)
-        let animator = UIViewPropertyAnimator(duration: BottomSheetMotion.response, timingParameters: BottomSheetMotion.timing)
+        let animator = UIViewPropertyAnimator(duration: motion.duration, timingParameters: motion.timing)
         animator.isInterruptible = true
         animator.addAnimations {
             sheet.animateChanges {
@@ -618,7 +684,7 @@ private struct BottomSheetRoot<Content: View>: View {
             }
             .transaction { transaction in
                 if transaction.animation == nil {
-                    transaction.animation = BottomSheetMotion.animation
+                    transaction.animation = BottomSheetMotion.active.animation
                 }
             }
     }
