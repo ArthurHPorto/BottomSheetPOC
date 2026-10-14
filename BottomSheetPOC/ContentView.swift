@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var motion = BottomSheetMotion.resolvedFromLaunchArguments()
 
     private let autoplay = ProcessInfo.processInfo.arguments.contains("-BottomSheetAutoplay")
+    private let burst = ProcessInfo.processInfo.arguments.contains("-BottomSheetBurst")
 
     private var configuration: BottomSheetConfiguration {
         var configuration = BottomSheetConfiguration()
@@ -64,9 +65,13 @@ struct ContentView: View {
 
     private func startAutoplayIfNeeded() {
         BottomSheetMotion.active = motion
-        guard autoplay else { return }
+        guard autoplay || burst else { return }
         selectedDetent = .content
         isPresented = true
+        if burst {
+            startBurst()
+            return
+        }
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             insert("Fundo", at: blocks.count)
@@ -97,6 +102,26 @@ struct ContentView: View {
             return "Detent: \(Int(value)) pt"
         case nil:
             return "Detent: automático"
+        }
+    }
+
+    private func startBurst() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            for index in 0..<4 {
+                insert("Rápido \(index)", at: blocks.count)
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            for _ in 0..<3 {
+                insert("Topo", at: 0)
+                try? await Task.sleep(nanoseconds: 40_000_000)
+            }
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            while blocks.count > 2 {
+                remove(at: 0)
+                try? await Task.sleep(nanoseconds: 40_000_000)
+            }
         }
     }
 
@@ -188,6 +213,7 @@ private struct GrowingSheet: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(motion.animation, value: blocks)
     }
 
     private func insertBlock(at index: Int) {

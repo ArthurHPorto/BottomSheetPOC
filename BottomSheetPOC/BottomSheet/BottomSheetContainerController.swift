@@ -27,7 +27,7 @@ enum BottomSheetMotion: String, CaseIterable, Identifiable {
 
     var duration: TimeInterval {
         switch self {
-        case .spring: 0.35
+        case .spring: 0.45
         case .ease: 0.45
         case .quick: 0.18
         case .linear: 0.35
@@ -118,6 +118,8 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     private var installedBottomInset: CGFloat = -1
     private var latestContent: Content?
     private var heightAnimator: UIViewPropertyAnimator?
+    private var heightCommitScheduled = false
+    private var heightNeedsFollowUp = false
 
     var shouldDismiss: () -> Bool = { true }
     var onWillDismiss: () -> Void = {}
@@ -190,6 +192,8 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         if isBeingDismissed || presentingViewController == nil {
             heightAnimator?.stopAnimation(true)
             heightAnimator = nil
+            heightCommitScheduled = false
+            heightNeedsFollowUp = false
             heightTarget = measuredContentHeight
         }
     }
@@ -250,23 +254,38 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
             && !isBeingDismissed
             && previous > 1
             && isShowingContentDetent
-        guard canAnimate, let sheet = resolvedSheet else {
+        guard canAnimate else {
+            heightCommitScheduled = false
+            heightNeedsFollowUp = false
             UIView.performWithoutAnimation {
                 self.resolvedSheet?.invalidateDetents()
             }
             return
         }
-        animateDetent(on: sheet)
+        // Several inserts in one burst share a single detent update.
+        guard !heightCommitScheduled else { return }
+        heightCommitScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            self?.commitHeightAnimation()
+        }
     }
 
-    /// Resizes the detent once, using the active timing. `animateChanges` keeps
-    /// the sheet's own layout intact; invalidating every frame drops the frame rate.
-    private func animateDetent(on sheet: UISheetPresentationController) {
+    /// One system animation. Stopping an in-flight resize to start another is what shakes the sheet.
+    private func commitHeightAnimation() {
+        heightCommitScheduled = false
+        guard let sheet = resolvedSheet else { return }
+        if heightAnimator?.state == .active {
+            heightNeedsFollowUp = true
+            return
+        }
+        heightNeedsFollowUp = false
         let motion = BottomSheetMotion.active
-        heightAnimator?.stopAnimation(true)
         let animator = UIViewPropertyAnimator(duration: motion.duration, timingParameters: motion.timing)
         animator.isInterruptible = true
-        animator.addAnimations {
+        animator.addAnimations { [weak self] in
+            guard let self else { return }
+            let width = self.configuration.preferredContentWidth ?? self.currentWidth
+            self.preferredContentSize = CGSize(width: width, height: self.measuredContentHeight)
             sheet.animateChanges {
                 sheet.invalidateDetents()
             }
@@ -274,6 +293,9 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         animator.addCompletion { [weak self] position in
             guard let self, position == .end else { return }
             self.heightAnimator = nil
+            guard self.heightNeedsFollowUp else { return }
+            self.heightNeedsFollowUp = false
+            self.commitHeightAnimation()
         }
         heightAnimator = animator
         animator.startAnimation()
@@ -420,6 +442,7 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     }
 
     private func publishPreferredContentSize(width: CGFloat) {
+        guard heightAnimator?.state != .active, !heightCommitScheduled else { return }
         guard measuredContentHeight > 1, width > 1 else { return }
         let resolvedWidth = configuration.preferredContentWidth ?? width
         let size = CGSize(width: resolvedWidth, height: measuredContentHeight)
@@ -727,6 +750,19 @@ private struct BottomSheetHeightProbe<Content: View>: View {
     }
 }
 
+private struct SheetScrollBehavior: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.scrollBounceBehavior(.basedOnSize, axes: .vertical).scrollEdgeEffectHidden(true)
+        } else if #available(iOS 16.4, *) {
+            content.scrollBounceBehavior(.basedOnSize, axes: .vertical)
+        } else {
+            content
+        }
+    }
+}
+
 private struct BottomSheetRoot<Content: View>: View {
     var grabberInset: CGFloat
     var bottomInset: CGFloat
@@ -734,20 +770,19 @@ private struct BottomSheetRoot<Content: View>: View {
     var relay: HeightRelay
 
     var body: some View {
-        content
-            .padding(.top, grabberInset)
-            .padding(.bottom, bottomInset)
-            .fixedSize(horizontal: false, vertical: true)
-            .background(heightReader)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .onPreferenceChange(BottomSheetHeightPreferenceKey.self) { height in
-                relay.onChange(height)
-            }
-            .transaction { transaction in
-                if transaction.animation == nil {
-                    transaction.animation = BottomSheetMotion.active.animation
-                }
-            }
+        ScrollView {
+            content
+                .padding(.top, grabberInset)
+                .padding(.bottom, bottomInset)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(heightReader)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .modifier(SheetScrollBehavior())
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onPreferenceChange(BottomSheetHeightPreferenceKey.self) { height in
+            relay.onChange(height)
+        }
     }
 
     private var heightReader: some View {
