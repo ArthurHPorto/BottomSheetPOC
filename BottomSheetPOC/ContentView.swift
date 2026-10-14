@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var motion = BottomSheetMotion.resolvedFromLaunchArguments()
 
     private let autoplay = ProcessInfo.processInfo.arguments.contains("-BottomSheetAutoplay")
+    @State private var engine = SheetLabEngine.resolvedFromLaunchArguments()
 
     private var configuration: BottomSheetConfiguration {
         var configuration = BottomSheetConfiguration()
@@ -26,7 +27,7 @@ struct ContentView: View {
             VStack(spacing: 8) {
                 Text("Bottom sheet")
                     .font(.largeTitle.bold())
-                Text("UISheetPresentationController no iOS 16+")
+                Text(engineTitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -36,6 +37,20 @@ struct ContentView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
                 .background(.thinMaterial, in: Capsule())
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(SheetLabEngine.allCases) { item in
+                        Button(item.title) {
+                            isPresented = false
+                            engine = item
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .tint(item == engine ? Color.accentColor : Color.secondary)
+                    }
+                }
+            }
 
             Button("Mostrar bottom sheet") {
                 selectedDetent = .content
@@ -52,14 +67,29 @@ struct ContentView: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemGroupedBackground))
-        .bottomSheet(
+        .modifier(SheetLabPresentation(
+            engine: engine,
             isPresented: $isPresented,
             selectedDetent: $selectedDetent,
-            configuration: configuration
+            configuration: configuration,
+            motion: motion
         ) {
             GrowingSheet(blocks: $blocks, selectedDetent: $selectedDetent, motion: $motion)
-        }
+        })
         .onAppear(perform: startAutoplayIfNeeded)
+    }
+
+    private var engineTitle: String {
+        switch engine {
+        case .uikit:
+            "UIKit apresenta a sheet"
+        case .height:
+            "SwiftUI .sheet com .height"
+        case .fitted:
+            "SwiftUI .sheet fitted"
+        case .introspect:
+            "SwiftUI .sheet com detent UIKit"
+        }
     }
 
     private func startAutoplayIfNeeded() {
