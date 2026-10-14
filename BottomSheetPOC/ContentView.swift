@@ -10,7 +10,6 @@ struct ContentView: View {
     @State private var motion = BottomSheetMotion.resolvedFromLaunchArguments()
 
     private let autoplay = ProcessInfo.processInfo.arguments.contains("-BottomSheetAutoplay")
-    @State private var engine = SheetLabEngine.resolvedFromLaunchArguments()
 
     private var configuration: BottomSheetConfiguration {
         var configuration = BottomSheetConfiguration()
@@ -27,7 +26,7 @@ struct ContentView: View {
             VStack(spacing: 8) {
                 Text("Bottom sheet")
                     .font(.largeTitle.bold())
-                Text(engineTitle)
+                Text("UISheetPresentationController no iOS 16+")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -37,20 +36,6 @@ struct ContentView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
                 .background(.thinMaterial, in: Capsule())
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(SheetLabEngine.allCases) { item in
-                        Button(item.title) {
-                            isPresented = false
-                            engine = item
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .tint(item == engine ? Color.accentColor : Color.secondary)
-                    }
-                }
-            }
 
             Button("Mostrar bottom sheet") {
                 selectedDetent = .content
@@ -67,29 +52,14 @@ struct ContentView: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemGroupedBackground))
-        .modifier(SheetLabPresentation(
-            engine: engine,
+        .bottomSheet(
             isPresented: $isPresented,
             selectedDetent: $selectedDetent,
-            configuration: configuration,
-            motion: motion
+            configuration: configuration
         ) {
             GrowingSheet(blocks: $blocks, selectedDetent: $selectedDetent, motion: $motion)
-        })
-        .onAppear(perform: startAutoplayIfNeeded)
-    }
-
-    private var engineTitle: String {
-        switch engine {
-        case .uikit:
-            "UIKit apresenta a sheet"
-        case .height:
-            "SwiftUI .sheet com .height"
-        case .fitted:
-            "SwiftUI .sheet fitted"
-        case .introspect:
-            "SwiftUI .sheet com detent UIKit"
         }
+        .onAppear(perform: startAutoplayIfNeeded)
     }
 
     private func startAutoplayIfNeeded() {
@@ -174,6 +144,7 @@ private struct GrowingSheet: View {
                     }
                 }
             }
+            .modifier(HiddenScrollEdgeEffect())
 
             ForEach(blocks) { block in
                 VStack(alignment: .leading, spacing: 6) {
@@ -232,6 +203,18 @@ private struct GrowingSheet: View {
         guard blocks.indices.contains(index) else { return }
         BottomSheetMotion.perform(motion) {
             blocks.remove(at: index)
+        }
+    }
+}
+
+/// The horizontal scroller otherwise draws the iOS 26 glass edge over the rows below it.
+private struct HiddenScrollEdgeEffect: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.scrollEdgeEffectHidden(true)
+        } else {
+            content
         }
     }
 }

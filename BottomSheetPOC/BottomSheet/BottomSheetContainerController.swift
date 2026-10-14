@@ -114,6 +114,9 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     private var measuredContentHeight: CGFloat = 0
     private var heightTarget: CGFloat = 0
     private var hasAppeared = false
+    private var didInstallRoot = false
+    private var installedBottomInset: CGFloat = -1
+    private var latestContent: Content?
     private var heightAnimator: UIViewPropertyAnimator?
 
     var shouldDismiss: () -> Bool = { true }
@@ -125,10 +128,11 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
 
     init(content: Content) {
         hostingController = UIHostingController(
-            rootView: BottomSheetRoot(grabberInset: 0, content: content, relay: heightRelay)
+            rootView: BottomSheetRoot(grabberInset: 0, bottomInset: 0, content: content, relay: heightRelay)
         )
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .pageSheet
+        edgesForExtendedLayout = .all
         hostingController.sizingOptions = []
         if #available(iOS 16.4, *) {
             hostingController.safeAreaRegions = []
@@ -163,9 +167,16 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         hostingController.didMove(toParent: self)
     }
 
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        attachSheetIfNeeded()
+        refreshRootForSafeAreaIfNeeded()
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         hasAppeared = true
+        attachSheetIfNeeded()
         if measuredContentHeight < 2 {
             let estimated = estimateHeight(width: currentWidth)
             if estimated > 1 {
@@ -185,7 +196,9 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
-        view.backgroundColor = UIColor(configuration.backgroundColor)
+        let background = UIColor(configuration.backgroundColor)
+        view.backgroundColor = background
+        hostingController.view.backgroundColor = background
     }
 
     func update(
@@ -197,17 +210,15 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     ) {
         self.configuration = configuration
         self.sourceView = sourceView
-        let root = BottomSheetRoot(
-            grabberInset: effectiveGrabberInset,
-            content: content,
-            relay: heightRelay
-        )
-        // Replacing rootView after presentation throws away the in-flight
+        latestContent = content
+        // Replacing rootView after the sheet is up throws away the in-flight
         // SwiftUI insertion animation and snaps every row into place.
-        if presentingViewController == nil {
-            hostingController.rootView = root
+        if !didInstallRoot {
+            installRoot(content)
         }
-        view.backgroundColor = UIColor(configuration.backgroundColor)
+        let background = UIColor(configuration.backgroundColor)
+        view.backgroundColor = background
+        hostingController.view.backgroundColor = background
         isModalInPresentation = configuration.isModalInPresentation
 
         if measuredContentHeight < 2 {
@@ -221,7 +232,7 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         let options = SheetOptions(configuration)
         if options != appliedOptions {
             appliedOptions = options
-            applyChrome(animated: hasAppeared && presentingViewController != nil)
+            applyChrome(animated: hasAppeared && resolvedSheet != nil)
         }
         applySelection(selection)
         publishPreferredContentSize(width: width)
@@ -234,14 +245,14 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         heightTarget = next
         measuredContentHeight = next
         let canAnimate = hasAppeared
-            && presentingViewController != nil
+            && resolvedSheet != nil
             && !isBeingPresented
             && !isBeingDismissed
             && previous > 1
             && isShowingContentDetent
-        guard canAnimate, let sheet = sheetPresentationController else {
+        guard canAnimate, let sheet = resolvedSheet else {
             UIView.performWithoutAnimation {
-                self.sheetPresentationController?.invalidateDetents()
+                self.resolvedSheet?.invalidateDetents()
             }
             return
         }
@@ -268,6 +279,51 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         animator.startAnimation()
     }
 
+    /// The sheet SwiftUI presented, whether this controller is the presented
+    /// controller or a child of it.
+    private var resolvedSheet: UISheetPresentationController? {
+        var controller: UIViewController? = self
+        while let current = controller {
+            if let sheet = current.sheetPresentationController {
+                return sheet
+            }
+            controller = current.parent
+        }
+        return nil
+    }
+
+    /// Keeps the last controls above the home indicator. The view itself still
+    /// paints through that inset, so the strip matches the rest of the sheet.
+    private var bottomContentInset: CGFloat {
+        let own = view.safeAreaInsets.bottom
+        if own > 0 { return own }
+        return view.window?.safeAreaInsets.bottom ?? 0
+    }
+
+    private func installRoot(_ content: Content) {
+        hostingController.rootView = BottomSheetRoot(
+            grabberInset: effectiveGrabberInset,
+            bottomInset: bottomContentInset,
+            content: content,
+            relay: heightRelay
+        )
+        didInstallRoot = true
+        installedBottomInset = bottomContentInset
+    }
+
+    private func refreshRootForSafeAreaIfNeeded() {
+        guard didInstallRoot, let latestContent else { return }
+        guard heightAnimator?.state != .active else { return }
+        guard abs(bottomContentInset - installedBottomInset) > 0.5 else { return }
+        installRoot(latestContent)
+    }
+
+    private func attachSheetIfNeeded() {
+        guard let sheet = resolvedSheet, sheet.delegate !== self else { return }
+        sheet.delegate = self
+        applyChrome(animated: false)
+    }
+
     private var effectiveGrabberInset: CGFloat {
         configuration.prefersGrabberVisible ? max(configuration.grabberContentInset, 0) : 0
     }
@@ -283,12 +339,12 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     }
 
     private var isShowingContentDetent: Bool {
-        guard let identifier = sheetPresentationController?.selectedDetentIdentifier else { return true }
+        guard let identifier = resolvedSheet?.selectedDetentIdentifier else { return true }
         return identifier == BottomSheetDetent.content.uiKitIdentifier
     }
 
     private func pushDetentHeight() {
-        guard let sheet = sheetPresentationController else { return }
+        guard let sheet = resolvedSheet else { return }
         let detents = makeDetents()
         let identifiers = detents.map(\.identifier)
         if sheet.detents.map(\.identifier) != identifiers {
@@ -299,7 +355,7 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     }
 
     private func applyChrome(animated: Bool) {
-        guard let sheet = sheetPresentationController else { return }
+        guard let sheet = resolvedSheet else { return }
         performChanges(animated: animated) {
             sheet.prefersGrabberVisible = configuration.prefersGrabberVisible
             sheet.prefersScrollingExpandsWhenScrolledToEdge = configuration.prefersScrollingExpandsWhenScrolledToEdge
@@ -325,14 +381,14 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     private func applySelection(_ selection: BottomSheetDetent?) {
         guard selection != lastAppliedSelection else { return }
         lastAppliedSelection = selection
-        guard let sheet = sheetPresentationController else { return }
-        performChanges(animated: hasAppeared && presentingViewController != nil && !isBeingPresented) {
+        guard let sheet = resolvedSheet else { return }
+        performChanges(animated: hasAppeared && resolvedSheet != nil && !isBeingPresented) {
             sheet.selectedDetentIdentifier = selection?.uiKitIdentifier
         }
     }
 
     private func installDetents(preservingSelection: Bool) {
-        guard let sheet = sheetPresentationController else { return }
+        guard let sheet = resolvedSheet else { return }
         let selected = preservingSelection ? sheet.selectedDetentIdentifier : nil
         let detents = makeDetents()
         let identifiers = detents.map(\.identifier)
@@ -352,7 +408,7 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     }
 
     private func performChanges(animated: Bool, _ changes: () -> Void) {
-        guard let sheet = sheetPresentationController else {
+        guard let sheet = resolvedSheet else {
             changes()
             return
         }
@@ -440,6 +496,7 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         let resolvedWidth = width > 1 ? width : currentWidth
         let root = BottomSheetHeightProbe(
             grabberInset: effectiveGrabberInset,
+            bottomInset: bottomContentInset,
             content: content ?? hostingController.rootView.content
         )
         let probe = UIHostingController(rootView: root)
@@ -658,11 +715,13 @@ private struct BottomSheetHeightPreferenceKey: PreferenceKey {
 
 private struct BottomSheetHeightProbe<Content: View>: View {
     var grabberInset: CGFloat
+    var bottomInset: CGFloat
     var content: Content
 
     var body: some View {
         content
             .padding(.top, grabberInset)
+            .padding(.bottom, bottomInset)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .topLeading)
     }
@@ -670,12 +729,14 @@ private struct BottomSheetHeightProbe<Content: View>: View {
 
 private struct BottomSheetRoot<Content: View>: View {
     var grabberInset: CGFloat
+    var bottomInset: CGFloat
     var content: Content
     var relay: HeightRelay
 
     var body: some View {
         content
             .padding(.top, grabberInset)
+            .padding(.bottom, bottomInset)
             .fixedSize(horizontal: false, vertical: true)
             .background(heightReader)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
