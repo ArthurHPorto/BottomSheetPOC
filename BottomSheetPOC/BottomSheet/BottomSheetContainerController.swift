@@ -241,7 +241,12 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
             sheetFillView = view
             fill = view
         }
-        fill.frame = clipping.bounds
+        let target = clipping.bounds
+        if fill.frame != target {
+            UIView.performWithoutAnimation {
+                fill.frame = target
+            }
+        }
         fill.backgroundColor = background
     }
 
@@ -343,8 +348,8 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     func noteContentHeight(_ height: CGFloat) {
         // The content has a fixed vertical size inside a `ScrollView`, so this is its
         // ideal height. Taller content is capped by the detent resolver and scrolls.
-        let next = ceil(height)
-        guard next > 1, abs(next - heightTarget) >= 1 else { return }
+        let next = pixelAligned(height)
+        guard next > 1, abs(next - heightTarget) >= heightPixel else { return }
         heightTarget = next
         measuredContentHeight = next
         let canTrack = hasAppeared
@@ -368,13 +373,34 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
 
     /// Applies the latest height without animation, in the same turn as the measurement.
     /// The content already animates, so a second sheet animation would lag the rows.
+    /// `layoutIfNeeded` commits that height before the frame is shown. Without it the
+    /// sheet catches up a frame later and shivers against the rows.
     private func applyTrackedHeight() {
         guard !isApplyingHeight, let sheet = resolvedSheet else { return }
         isApplyingHeight = true
         defer { isApplyingHeight = false }
-        UIView.performWithoutAnimation {
-            sheet.invalidateDetents()
-        }
+        var passes = 0
+        repeat {
+            passes += 1
+            let applied = measuredContentHeight
+            UIView.performWithoutAnimation {
+                sheet.invalidateDetents()
+                sheet.containerView?.layoutIfNeeded()
+            }
+            if abs(measuredContentHeight - applied) < heightPixel || passes == 2 {
+                break
+            }
+        } while true
+    }
+
+    private var heightPixel: CGFloat {
+        let scale = view.window?.screen.scale ?? UIScreen.main.scale
+        return scale > 1 ? 1 / scale : 1
+    }
+
+    private func pixelAligned(_ height: CGFloat) -> CGFloat {
+        let scale = 1 / heightPixel
+        return (height * scale).rounded() / scale
     }
 
     /// The sheet SwiftUI presented, whether this controller is the presented
@@ -390,12 +416,14 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         return nil
     }
 
-    /// Keeps the last controls above the home indicator. The view itself still
-    /// paints through that inset, so the strip matches the rest of the sheet.
+    /// Keeps the last controls above the home indicator. The window inset stays
+    /// put while the sheet moves. The view's own inset animates with it, and
+    /// feeding that back into the content restarts the detent mid-gesture.
     private var bottomContentInset: CGFloat {
-        let own = view.safeAreaInsets.bottom
-        if own > 0 { return own }
-        return view.window?.safeAreaInsets.bottom ?? 0
+        if let bottom = view.window?.safeAreaInsets.bottom, bottom > 0 {
+            return bottom
+        }
+        return view.safeAreaInsets.bottom
     }
 
     private func installRoot(_ content: Content) {
