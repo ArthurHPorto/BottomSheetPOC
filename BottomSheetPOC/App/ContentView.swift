@@ -49,7 +49,12 @@ struct ContentView: View {
         .background(Color(.systemGroupedBackground))
         .bottomSheet(
             isPresented: $isPresented,
-            selectedDetent: $selectedDetent
+            selectedDetent: $selectedDetent,
+            placement: .withDuo(
+                closed: .trailing,
+                partiallyOpen: .trailing,
+                fullyOpen: .center
+            )
         ) {
             GrowingSheet(blocks: $blocks, selectedDetent: $selectedDetent, motion: $motion)
         }

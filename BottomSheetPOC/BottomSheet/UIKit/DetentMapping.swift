@@ -1,6 +1,25 @@
 import SwiftUI
 import UIKit
 
+extension BottomSheetPlacement {
+    /// `preferredPlacement` exists on iOS 27. Earlier systems ignore it and keep the sheet at the bottom.
+    @available(iOS 27.0, *)
+    var uiKitPlacement: UISheetPresentationController.Placement {
+        switch self {
+        case .automatic:
+            return .automatic
+        case .leading:
+            return .leading
+        case .center:
+            return .center
+        case .trailing:
+            return .trailing
+        case .withDuo:
+            return .automatic
+        }
+    }
+}
+
 enum DetentMapping {
     static func ordered(
         _ detents: [BottomSheetDetent],
@@ -135,8 +154,9 @@ struct SheetOptions: Equatable {
     var backgroundDescription: String
     var grabberContentInset: CGFloat
     var adaptiveStyle: BottomSheetAdaptiveStyle?
+    var placement: BottomSheetPlacement
 
-    init(_ configuration: BottomSheetConfiguration) {
+    init(_ configuration: BottomSheetConfiguration, placement: BottomSheetPlacement) {
         detents = configuration.detents
         largestUndimmedDetent = configuration.largestUndimmedDetent
         prefersGrabberVisible = configuration.prefersGrabberVisible
@@ -150,5 +170,6 @@ struct SheetOptions: Equatable {
         backgroundDescription = String(describing: configuration.backgroundColor)
         grabberContentInset = configuration.grabberContentInset
         adaptiveStyle = configuration.adaptiveStyle
+        self.placement = placement
     }
 }

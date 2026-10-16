@@ -11,6 +11,9 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     private let hostingController: UIHostingController<BottomSheetRoot<Content>>
 
     private var configuration = BottomSheetConfiguration()
+    private var placement = BottomSheetPlacement.automatic
+    private var hingeState = HingeState.unavailable
+    private var didInstallHingeObservation = false
     private var sourceView: UIView?
     private var appliedOptions: SheetOptions?
     private var lastAppliedSelection: BottomSheetDetent?
@@ -69,6 +72,7 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     override func viewDidLoad() {
         super.viewDidLoad()
         configuration = designSystemConfiguration()
+        installHingeObservationIfNeeded()
         applyBackground()
         view.clipsToBounds = true
         addChild(hostingController)
@@ -151,10 +155,12 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     func update(
         content: Content,
         selection: BottomSheetDetent?,
+        placement: BottomSheetPlacement,
         sourceView: UIView?,
         width: CGFloat
     ) {
         configuration = designSystemConfiguration()
+        self.placement = placement
         self.sourceView = sourceView
         latestContent = content
         // Replacing rootView after the sheet is up throws away the in-flight
@@ -170,7 +176,7 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
             heightTracker.seed(estimated)
         }
 
-        let options = SheetOptions(configuration)
+        let options = SheetOptions(configuration, placement: resolvedPlacement)
         if options != appliedOptions {
             appliedOptions = options
             applyChrome(animated: hasAppeared && resolvedSheet != nil)
@@ -307,6 +313,66 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         return identifier == BottomSheetDetent.content.uiKitIdentifier
     }
 
+    /// The position for the hinge state we last observed.
+    /// A plain case applies on every device. `withDuo` picks one case per state.
+    private var resolvedPlacement: BottomSheetPlacement {
+        switch placement {
+        case .automatic, .leading, .center, .trailing:
+            return placement
+        case .withDuo(let closed, let partiallyOpen, let fullyOpen):
+            switch hingeState {
+            case .closed:
+                return closed.leaf
+            case .partiallyOpen:
+                return partiallyOpen.leaf
+            case .fullyOpen:
+                return fullyOpen.leaf
+            case .unavailable, .unknown:
+                return .automatic
+            }
+        }
+    }
+
+    private enum HingeState {
+        case unavailable
+        case unknown
+        case closed
+        case partiallyOpen
+        case fullyOpen
+    }
+
+    private func installHingeObservationIfNeeded() {
+        guard !didInstallHingeObservation else { return }
+        guard #available(iOS 27.1, *) else { return }
+        didInstallHingeObservation = true
+        let interaction = UIHingeInteraction { [weak self] _, update in
+            self?.noteHinge(update.hinge?.status)
+        }
+        view.addInteraction(interaction)
+    }
+
+    @available(iOS 27.1, *)
+    private func noteHinge(_ status: UIHinge.Status?) {
+        let next: HingeState
+        switch status {
+        case .closed:
+            next = .closed
+        case .partiallyOpen:
+            next = .partiallyOpen
+        case .fullyOpen:
+            next = .fullyOpen
+        case .unknown:
+            next = .unknown
+        case nil:
+            next = .unavailable
+        @unknown default:
+            next = .unknown
+        }
+        guard next != hingeState else { return }
+        hingeState = next
+        applyChrome(animated: hasAppeared && resolvedSheet != nil)
+    }
+
     private func pushDetentHeight() {
         guard let sheet = resolvedSheet else { return }
         let detents = makeDetents()
@@ -327,6 +393,9 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
             sheet.widthFollowsPreferredContentSizeWhenEdgeAttached = configuration.widthFollowsPreferredContentSizeWhenEdgeAttached
             sheet.preferredCornerRadius = configuration.preferredCornerRadius
             sheet.sourceView = configuration.centersOnSourceView ? sourceView : nil
+            if #available(iOS 27.0, *) {
+                sheet.preferredPlacement = resolvedPlacement.uiKitPlacement
+            }
             installDetents(preservingSelection: true)
             applyUndimmed(on: sheet)
             if let selection = lastAppliedSelection {

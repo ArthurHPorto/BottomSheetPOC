@@ -4,6 +4,7 @@ import UIKit
 /// The UIKit sheet controller, presented by SwiftUI's `.sheet`.
 struct BottomSheetRepresentable<SheetContent: View>: UIViewControllerRepresentable {
     var selectedDetent: Binding<BottomSheetDetent?>?
+    var placement: BottomSheetPlacement
     var onDetentChange: ((BottomSheetDetent) -> Void)?
     var onDismiss: (() -> Void)?
     var onHeightChange: ((CGFloat) -> Void)?
@@ -29,6 +30,7 @@ struct BottomSheetRepresentable<SheetContent: View>: UIViewControllerRepresentab
         controller.update(
             content: content(),
             selection: selectedDetent?.wrappedValue,
+            placement: placement,
             sourceView: nil,
             width: width
         )
@@ -66,6 +68,7 @@ struct BottomSheetRepresentable<SheetContent: View>: UIViewControllerRepresentab
 private struct BottomSheetModifier<SheetContent: View>: ViewModifier {
     @Binding var isPresented: Bool
     var selectedDetent: Binding<BottomSheetDetent?>?
+    var placement: BottomSheetPlacement
     var onDismiss: (() -> Void)?
     var onDetentChange: ((BottomSheetDetent) -> Void)?
     var onHeightChange: ((CGFloat) -> Void)?
@@ -75,6 +78,7 @@ private struct BottomSheetModifier<SheetContent: View>: ViewModifier {
         content.sheet(isPresented: $isPresented) {
             BottomSheetRepresentable(
                 selectedDetent: selectedDetent,
+                placement: placement,
                 onDetentChange: onDetentChange,
                 onDismiss: onDismiss,
                 onHeightChange: onHeightChange,
@@ -88,6 +92,7 @@ private struct BottomSheetModifier<SheetContent: View>: ViewModifier {
 private struct BottomSheetItemModifier<Item: Identifiable, SheetContent: View>: ViewModifier {
     @Binding var item: Item?
     var selectedDetent: Binding<BottomSheetDetent?>?
+    var placement: BottomSheetPlacement
     var onDismiss: (() -> Void)?
     var onDetentChange: ((BottomSheetDetent) -> Void)?
     var onHeightChange: ((CGFloat) -> Void)?
@@ -106,6 +111,7 @@ private struct BottomSheetItemModifier<Item: Identifiable, SheetContent: View>: 
                     }
                 ),
                 selectedDetent: selectedDetent,
+                placement: placement,
                 onDismiss: onDismiss,
                 onDetentChange: onDetentChange,
                 onHeightChange: onHeightChange
@@ -127,6 +133,7 @@ extension View {
     func bottomSheet<SheetContent: View>(
         isPresented: Binding<Bool>,
         selectedDetent: Binding<BottomSheetDetent?>? = nil,
+        placement: BottomSheetPlacement = .automatic,
         onDismiss: (() -> Void)? = nil,
         onDetentChange: ((BottomSheetDetent) -> Void)? = nil,
         onHeightChange: ((CGFloat) -> Void)? = nil,
@@ -136,6 +143,7 @@ extension View {
             BottomSheetModifier(
                 isPresented: isPresented,
                 selectedDetent: selectedDetent,
+                placement: placement,
                 onDismiss: onDismiss,
                 onDetentChange: onDetentChange,
                 onHeightChange: onHeightChange,
@@ -148,6 +156,7 @@ extension View {
     func bottomSheet<Item: Identifiable, SheetContent: View>(
         item: Binding<Item?>,
         selectedDetent: Binding<BottomSheetDetent?>? = nil,
+        placement: BottomSheetPlacement = .automatic,
         onDismiss: (() -> Void)? = nil,
         onDetentChange: ((BottomSheetDetent) -> Void)? = nil,
         onHeightChange: ((CGFloat) -> Void)? = nil,
@@ -157,6 +166,7 @@ extension View {
             BottomSheetItemModifier(
                 item: item,
                 selectedDetent: selectedDetent,
+                placement: placement,
                 onDismiss: onDismiss,
                 onDetentChange: onDetentChange,
                 onHeightChange: onHeightChange,
