@@ -166,6 +166,7 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
     private var lastMaximumDetentValue: CGFloat = 0
     private var avoidedDetentValues = Set<CGFloat>()
     private var hasSeenFloatingSheet = false
+    private var sheetFillView: UIView?
 
     var shouldDismiss: () -> Bool = { true }
     var onWillDismiss: () -> Void = {}
@@ -198,7 +199,7 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = UIColor(configuration.backgroundColor)
+        applyBackground()
         view.clipsToBounds = true
         addChild(hostingController)
         hostingController.view.translatesAutoresizingMaskIntoConstraints = false
@@ -217,6 +218,44 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         attachSheetIfNeeded()
         refreshMetricsIfNeeded()
         avoidEdgeAttachedFlashIfNeeded()
+        applyBackground()
+    }
+
+    /// The presentation `HostingView` stays clear and only covers part of its
+    /// parent with content. On iPhone Duo the uncovered strip shows the sheet
+    /// material. The opaque color belongs on that parent, `_UIDropShadowClippingView`.
+    private func applyBackground() {
+        let background = UIColor(configuration.backgroundColor)
+        view.backgroundColor = background
+        hostingController.view.backgroundColor = background
+        guard let clipping = sheetClippingView else { return }
+        let fill: UIView
+        if let existing = sheetFillView, existing.superview === clipping {
+            fill = existing
+        } else {
+            sheetFillView?.removeFromSuperview()
+            let view = UIView()
+            view.isUserInteractionEnabled = false
+            view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            clipping.insertSubview(view, at: 0)
+            sheetFillView = view
+            fill = view
+        }
+        fill.frame = clipping.bounds
+        fill.backgroundColor = background
+    }
+
+    /// Parent of `PresentationHostingController`'s `HostingView`.
+    private var sheetClippingView: UIView? {
+        var current: UIView? = view
+        while let next = current?.superview {
+            let name = NSStringFromClass(type(of: next))
+            if name.contains("PresentationHostingController"), name.contains("HostingView") {
+                return next.superview
+            }
+            current = next
+        }
+        return nil
     }
 
     /// A floating sheet switches to the edge-attached shape for one exact detent value,
@@ -263,9 +302,7 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
-        let background = UIColor(configuration.backgroundColor)
-        view.backgroundColor = background
-        hostingController.view.backgroundColor = background
+        applyBackground()
     }
 
     func update(
@@ -283,9 +320,7 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         if !didInstallRoot {
             installRoot(content)
         }
-        let background = UIColor(configuration.backgroundColor)
-        view.backgroundColor = background
-        hostingController.view.backgroundColor = background
+        applyBackground()
         isModalInPresentation = configuration.isModalInPresentation
 
         if measuredContentHeight < 2 {
