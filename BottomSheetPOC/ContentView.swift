@@ -244,7 +244,6 @@ private struct GrowingSheet: View {
                     }
                 }
             }
-            .modifier(HiddenScrollEdgeEffect())
 
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(blocks) { block in
@@ -531,9 +530,6 @@ private final class MeasureHost: UIView {
         hostingController.view.backgroundColor = .clear
         hostingController.view.isUserInteractionEnabled = false
         hostingController.view.alpha = 0
-        if #available(iOS 16.4, *) {
-            hostingController.safeAreaRegions = []
-        }
         addSubview(hostingController.view)
     }
 
@@ -562,18 +558,6 @@ private final class MeasureHost: UIView {
         let report = onHeight
         DispatchQueue.main.async {
             report(height)
-        }
-    }
-}
-
-/// The horizontal scroller otherwise draws the iOS 26 glass edge over the rows below it.
-private struct HiddenScrollEdgeEffect: ViewModifier {
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.scrollEdgeEffectHidden(true)
-        } else {
-            content
         }
     }
 }

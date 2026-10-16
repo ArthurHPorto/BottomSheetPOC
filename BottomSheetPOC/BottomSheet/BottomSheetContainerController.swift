@@ -182,9 +182,6 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         modalPresentationStyle = .pageSheet
         edgesForExtendedLayout = .all
         hostingController.sizingOptions = []
-        if #available(iOS 16.4, *) {
-            hostingController.safeAreaRegions = []
-        }
         hostingController.view.backgroundColor = .clear
         hostingController.view.clipsToBounds = true
         hostingController.view.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
@@ -431,12 +428,6 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
             sheet.widthFollowsPreferredContentSizeWhenEdgeAttached = configuration.widthFollowsPreferredContentSizeWhenEdgeAttached
             sheet.preferredCornerRadius = configuration.preferredCornerRadius
             sheet.sourceView = configuration.centersOnSourceView ? sourceView : nil
-            if #available(iOS 17.0, *) {
-                sheet.prefersPageSizing = configuration.prefersPageSizing
-            }
-            if #available(iOS 27.0, *) {
-                sheet.preferredPlacement = configuration.preferredPlacement.uiKitPlacement
-            }
             installDetents(preservingSelection: true)
             applyUndimmed(on: sheet)
             if let selection = lastAppliedSelection {
@@ -510,9 +501,9 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         var seen = Set<String>()
         let detents = ordered.compactMap { detent -> UISheetPresentationController.Detent? in
             guard seen.insert(detent.identifier).inserted else { return nil }
-            return styled(uiKitDetent(for: detent))
+            return uiKitDetent(for: detent)
         }
-        return detents.isEmpty ? [styled(.large())] : detents
+        return detents.isEmpty ? [.large()] : detents
     }
 
     private func normalizedDetents() -> [BottomSheetDetent] {
@@ -553,13 +544,6 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         }
     }
 
-    private func styled(_ detent: UISheetPresentationController.Detent) -> UISheetPresentationController.Detent {
-        if #available(iOS 26.1, *), let material = configuration.detentMaterial {
-            detent.backgroundEffect = material.makeEffect()
-        }
-        return detent
-    }
-
     private func estimateHeight(width: CGFloat, content: Content? = nil) -> CGFloat {
         let resolvedWidth = width > 1 ? width : currentWidth
         let root = BottomSheetHeightProbe(
@@ -569,9 +553,6 @@ final class BottomSheetContainerController<Content: View>: UIViewController, UIS
         )
         let probe = UIHostingController(rootView: root)
         probe.sizingOptions = [.intrinsicContentSize]
-        if #available(iOS 16.4, *) {
-            probe.safeAreaRegions = []
-        }
         probe.view.bounds = CGRect(x: 0, y: 0, width: resolvedWidth, height: 1)
         probe.view.setNeedsLayout()
         probe.view.layoutIfNeeded()
@@ -659,22 +640,6 @@ private extension BottomSheetDetent {
     }
 }
 
-private extension BottomSheetPlacement {
-    @available(iOS 27.0, *)
-    var uiKitPlacement: UISheetPresentationController.Placement {
-        switch self {
-        case .automatic:
-            return .automatic
-        case .leading:
-            return .leading
-        case .center:
-            return .center
-        case .trailing:
-            return .trailing
-        }
-    }
-}
-
 private extension BottomSheetAdaptiveStyle {
     var modalStyle: UIModalPresentationStyle {
         switch self {
@@ -709,25 +674,6 @@ private extension BottomSheetAdaptiveStyle {
     }
 }
 
-private extension BottomSheetDetentMaterial {
-    func makeEffect() -> UIVisualEffect {
-        let style: UIBlurEffect.Style
-        switch self {
-        case .systemChrome:
-            style = .systemChromeMaterial
-        case .systemMaterial:
-            style = .systemMaterial
-        case .systemThinMaterial:
-            style = .systemThinMaterial
-        case .systemUltraThinMaterial:
-            style = .systemUltraThinMaterial
-        case .systemThickMaterial:
-            style = .systemThickMaterial
-        }
-        return UIBlurEffect(style: style)
-    }
-}
-
 private struct SheetOptions: Equatable {
     var detents: [BottomSheetDetent]
     var largestUndimmedDetent: BottomSheetDetent?
@@ -737,12 +683,9 @@ private struct SheetOptions: Equatable {
     var widthFollowsPreferredContentSizeWhenEdgeAttached: Bool
     var preferredCornerRadius: CGFloat?
     var preferredContentWidth: CGFloat?
-    var prefersPageSizing: Bool
-    var preferredPlacement: BottomSheetPlacement
     var centersOnSourceView: Bool
     var isModalInPresentation: Bool
     var backgroundDescription: String
-    var detentMaterial: BottomSheetDetentMaterial?
     var grabberContentInset: CGFloat
     var adaptiveStyle: BottomSheetAdaptiveStyle?
 
@@ -755,12 +698,9 @@ private struct SheetOptions: Equatable {
         widthFollowsPreferredContentSizeWhenEdgeAttached = configuration.widthFollowsPreferredContentSizeWhenEdgeAttached
         preferredCornerRadius = configuration.preferredCornerRadius
         preferredContentWidth = configuration.preferredContentWidth
-        prefersPageSizing = configuration.prefersPageSizing
-        preferredPlacement = configuration.preferredPlacement
         centersOnSourceView = configuration.centersOnSourceView
         isModalInPresentation = configuration.isModalInPresentation
         backgroundDescription = String(describing: configuration.backgroundColor)
-        detentMaterial = configuration.detentMaterial
         grabberContentInset = configuration.grabberContentInset
         adaptiveStyle = configuration.adaptiveStyle
     }
@@ -786,19 +726,6 @@ private struct BottomSheetHeightProbe<Content: View>: View {
     }
 }
 
-private struct SheetScrollBehavior: ViewModifier {
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.scrollBounceBehavior(.basedOnSize, axes: .vertical).scrollEdgeEffectHidden(true)
-        } else if #available(iOS 16.4, *) {
-            content.scrollBounceBehavior(.basedOnSize, axes: .vertical)
-        } else {
-            content
-        }
-    }
-}
-
 private struct BottomSheetRoot<Content: View>: View {
     var content: Content
     @ObservedObject var relay: HeightRelay
@@ -812,7 +739,6 @@ private struct BottomSheetRoot<Content: View>: View {
                 .background(heightReader)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .modifier(SheetScrollBehavior())
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
